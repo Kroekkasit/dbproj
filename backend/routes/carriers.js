@@ -434,19 +434,14 @@ router.get('/my-parcels', authMiddleware, async (req, res) => {
   }
 });
 
-// Update parcel status (for carrier)
-router.post('/update-status/:parcelID', authMiddleware, [
-  body('eventType').notEmpty(),
-  body('status').notEmpty(),
-  body('description').optional()
-], async (req, res) => {
+// Get route stops for a parcel
+router.get('/route-stops/:parcelID', authMiddleware, async (req, res) => {
   try {
     if (req.user.type !== 'carrier') {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
     const { parcelID } = req.params;
-    const { eventType, status, description, locationID } = req.body;
 
     // Check if carrier is assigned to this parcel
     const [assignments] = await pool.execute(
@@ -458,43 +453,190 @@ router.post('/update-status/:parcelID', authMiddleware, [
       return res.status(403).json({ message: 'You are not assigned to this parcel' });
     }
 
-    // Create shipment event
-    await pool.execute(
-      `INSERT INTO ShipmentEvent (ParcelID, EventType, Status, Description, LocationID)
-       VALUES (?, ?, ?, ?, ?)`,
-      [parcelID, eventType, status, description || '', locationID || null]
-    );
-
-    // Update parcel status if needed
-    if (status === 'Delivered') {
-      await pool.execute(
-        'UPDATE Parcel SET Status = ? WHERE ParcelID = ?',
-        ['Delivered', parcelID]
-      );
-    } else {
-      await pool.execute(
-        'UPDATE Parcel SET Status = ? WHERE ParcelID = ?',
-        ['In Transit', parcelID]
-      );
-    }
-
-    // Create notification for sender
-    const [parcels] = await pool.execute(
-      'SELECT SenderID, TrackingNumber FROM Parcel WHERE ParcelID = ?',
+    // Get route stops with warehouse info (all stops)
+    const [routeStops] = await pool.execute(
+      `SELECT rs.*, l.Address, l.District, l.Subdistrict, l.Province, w.Name as WarehouseName, w.Code as WarehouseCode
+       FROM RouteStop rs
+       INNER JOIN Location l ON rs.LocationID = l.LocationID
+       LEFT JOIN Warehouse w ON rs.WarehouseID = w.WarehouseID
+       INNER JOIN Route r ON rs.RouteID = r.RouteID
+       WHERE r.ParcelID = ?
+       ORDER BY rs.Sequence ASC`,
       [parcelID]
     );
 
-    if (parcels.length > 0) {
-      await pool.execute(
-        `INSERT INTO Notification (UserID, Type, Title, Message, IsRead, ParcelID)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [parcels[0].SenderID, 'StatusUpdate', 'Parcel Status Update',
-         `Your parcel ${parcels[0].TrackingNumber} status: ${status}`,
-         false, parcelID]
-      );
+    res.json({ routeStops });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Update parcel status (for carrier)
+router.post('/update-status/:parcelID', authMiddleware, [
+  body('eventType').optional(),
+  body('status').optional(),
+  body('description').optional(),
+  body('routeStopID').optional()
+], async (req, res) => {
+  try {
+    if (req.user.type !== 'carrier') {
+      return res.status(403).json({ message: 'Unauthorized' });
     }
 
-    res.json({ message: 'Status updated successfully' });
+    const { parcelID } = req.params;
+    const { eventType, status, description, locationID, routeStopID, isLate } = req.body;
+
+    // Check if carrier is assigned to this parcel
+    const [assignments] = await pool.execute(
+      'SELECT * FROM ParcelAssignment WHERE CarrierID = ? AND ParcelID = ?',
+      [req.user.carrierID, parcelID]
+    );
+
+    if (assignments.length === 0) {
+      return res.status(403).json({ message: 'You are not assigned to this parcel' });
+    }
+
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    try {
+      // If routeStopID is provided, update the route stop (warehouse arrival)
+      if (routeStopID) {
+        // Validate required fields for route stop update
+        if (isLate === undefined) {
+          await connection.rollback();
+          return res.status(400).json({ message: 'isLate field is required for route stop updates' });
+        }
+        const stopStatus = isLate ? 'Late' : 'Completed';
+        const [routeStops] = await connection.execute(
+          `SELECT rs.*, w.Name as WarehouseName
+           FROM RouteStop rs
+           LEFT JOIN Warehouse w ON rs.WarehouseID = w.WarehouseID
+           WHERE rs.StopID = ? AND rs.RouteID IN (SELECT RouteID FROM Route WHERE ParcelID = ?)`,
+          [routeStopID, parcelID]
+        );
+
+        if (routeStops.length === 0) {
+          await connection.rollback();
+          return res.status(404).json({ message: 'Route stop not found' });
+        }
+
+        const routeStop = routeStops[0];
+
+        // Update route stop
+        await connection.execute(
+          `UPDATE RouteStop SET StopStatus = ?, AAT = NOW()
+           WHERE StopID = ?`,
+          [stopStatus, routeStopID]
+        );
+
+        // Get warehouse name for description
+        const warehouseInfo = routeStop.WarehouseName ? ` at ${routeStop.WarehouseName}` : '';
+        const eventDescription = description || 
+          (isLate ? `Arrived late${warehouseInfo}` : `Arrived${warehouseInfo}`);
+
+        // Create shipment event with warehouse location
+        await connection.execute(
+          `INSERT INTO ShipmentEvent (ParcelID, EventType, Status, Description, LocationID)
+           VALUES (?, ?, ?, ?, ?)`,
+          [parcelID, eventType || 'Warehouse Arrival', status, eventDescription, routeStop.LocationID]
+        );
+
+        // Check if all route stops are completed
+        const [remainingStops] = await connection.execute(
+          `SELECT COUNT(*) as count FROM RouteStop rs
+           INNER JOIN Route r ON rs.RouteID = r.RouteID
+           WHERE r.ParcelID = ? AND rs.StopStatus NOT IN ('Completed', 'Late')`,
+          [parcelID]
+        );
+
+        if (remainingStops[0].count === 0) {
+          // All stops completed, update route status
+          await connection.execute(
+            `UPDATE Route SET Status = 'Completed' 
+             WHERE ParcelID = ?`,
+            [parcelID]
+          );
+        }
+
+        await connection.commit();
+
+        const response = { message: 'Status updated successfully' };
+        if (routeStop.WarehouseName) {
+          response.warehouseName = routeStop.WarehouseName;
+        }
+
+        res.json(response);
+        return;
+      } else {
+        // Regular status update without route stop
+        // Validate required fields
+        if (!eventType || !status) {
+          await connection.rollback();
+          return res.status(400).json({ message: 'eventType and status are required for regular status updates' });
+        }
+
+        // First check if there are pending route stops - if so, only allow route stop updates
+        const [pendingRouteStops] = await connection.execute(
+          `SELECT COUNT(*) as count FROM RouteStop rs
+           INNER JOIN Route r ON rs.RouteID = r.RouteID
+           WHERE r.ParcelID = ? AND rs.StopStatus = 'Pending' AND rs.WarehouseID IS NOT NULL`,
+          [parcelID]
+        );
+
+        if (pendingRouteStops[0].count > 0) {
+          await connection.rollback();
+          return res.status(400).json({ 
+            message: 'There are pending warehouse stops. Please update route stops instead.',
+            pendingStops: pendingRouteStops[0].count
+          });
+        }
+
+        await connection.execute(
+          `INSERT INTO ShipmentEvent (ParcelID, EventType, Status, Description, LocationID)
+           VALUES (?, ?, ?, ?, ?)`,
+          [parcelID, eventType, status, description || '', locationID || null]
+        );
+
+        // Update parcel status if needed
+        if (status === 'Delivered') {
+          await connection.execute(
+            'UPDATE Parcel SET Status = ? WHERE ParcelID = ?',
+            ['Delivered', parcelID]
+          );
+        } else {
+          await connection.execute(
+            'UPDATE Parcel SET Status = ? WHERE ParcelID = ?',
+            ['In Transit', parcelID]
+          );
+        }
+
+        // Create notification for sender
+        const [parcels] = await connection.execute(
+          'SELECT SenderID, TrackingNumber FROM Parcel WHERE ParcelID = ?',
+          [parcelID]
+        );
+
+        if (parcels.length > 0) {
+          await connection.execute(
+            `INSERT INTO Notification (UserID, Type, Title, Message, IsRead, ParcelID)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [parcels[0].SenderID, 'StatusUpdate', 'Parcel Status Update',
+             `Your parcel ${parcels[0].TrackingNumber} status: ${status}`,
+             false, parcelID]
+          );
+        }
+
+        await connection.commit();
+        res.json({ message: 'Status updated successfully' });
+      }
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });

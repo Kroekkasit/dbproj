@@ -184,14 +184,28 @@ CREATE TABLE IF NOT EXISTS `ShipmentEvent` (
   FOREIGN KEY (`LocationID`) REFERENCES `Location` (`LocationID`)
 );
 
+-- Warehouse table
+CREATE TABLE IF NOT EXISTS `Warehouse` (
+  `WarehouseID` INT AUTO_INCREMENT PRIMARY KEY,
+  `Name` VARCHAR(255) NOT NULL,
+  `Code` VARCHAR(50),
+  `LocationID` INT NOT NULL,
+  `IsActive` BOOLEAN DEFAULT TRUE,
+  `CreatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `UpdatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (`LocationID`) REFERENCES `Location` (`LocationID`) ON DELETE RESTRICT
+);
+
 -- Route table
 CREATE TABLE IF NOT EXISTS `Route` (
   `RouteID` INT AUTO_INCREMENT PRIMARY KEY,
+  `ParcelID` INT NOT NULL,
   `CarrierID` INT,
   `RouteDate` DATETIME,
   `StartTime` DATETIME,
   `Status` VARCHAR(255) DEFAULT 'Planning',
   `CreatedAt` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (`ParcelID`) REFERENCES `Parcel` (`ParcelID`) ON DELETE CASCADE,
   FOREIGN KEY (`CarrierID`) REFERENCES `Carrier` (`CarrierID`) ON DELETE SET NULL
 );
 
@@ -202,12 +216,14 @@ CREATE TABLE IF NOT EXISTS `RouteStop` (
   `ETA` DATETIME,
   `AAT` DATETIME,
   `StopStatus` VARCHAR(255) DEFAULT 'Pending',
-  `RouteID` INT,
+  `RouteID` INT NOT NULL,
   `ParcelID` INT,
   `LocationID` INT NOT NULL,
+  `WarehouseID` INT,
   FOREIGN KEY (`RouteID`) REFERENCES `Route` (`RouteID`) ON DELETE CASCADE,
-  FOREIGN KEY (`LocationID`) REFERENCES `Location` (`LocationID`),
-  FOREIGN KEY (`ParcelID`) REFERENCES `Parcel` (`ParcelID`) ON DELETE SET NULL
+  FOREIGN KEY (`LocationID`) REFERENCES `Location` (`LocationID`) ON DELETE RESTRICT,
+  FOREIGN KEY (`ParcelID`) REFERENCES `Parcel` (`ParcelID`) ON DELETE SET NULL,
+  FOREIGN KEY (`WarehouseID`) REFERENCES `Warehouse` (`WarehouseID`) ON DELETE SET NULL
 );
 
 -- Notification table
@@ -312,6 +328,52 @@ SELECT
 FROM Province p1
 CROSS JOIN Province p2
 WHERE p1.ProvinceID != p2.ProvinceID;
+
+-- Create warehouse locations and warehouses
+-- Step 1: Insert warehouse locations first (using IGNORE to avoid duplicates)
+INSERT IGNORE INTO `Location` (`Address`, `District`, `Subdistrict`, `Province`, `Country`)
+VALUES 
+  ('999 Warehouse Complex, Sukhumvit Road', 'Wattana', 'Khlong Toei Nuea', 'Bangkok', 'Thailand'),
+  ('123 Industrial Park, Hang Dong Road', 'Hang Dong', 'Ban Wang', 'Chiang Mai', 'Thailand'),
+  ('456 Logistics Park, Thepkasattri Road', 'Thalang', 'Thepkasattri', 'Phuket', 'Thailand'),
+  ('789 Logistics Center, Mittraphap Road', 'Mueang Khon Kaen', 'Nai Mueang', 'Khon Kaen', 'Thailand'),
+  ('321 Distribution Hub, Talat Road', 'Mueang Surat Thani', 'Wat Pradu', 'Surat Thani', 'Thailand');
+
+-- Step 2: Create warehouses using the locations created above
+INSERT INTO `Warehouse` (`Name`, `Code`, `LocationID`, `IsActive`)
+SELECT 'Bangkok Central Warehouse', 'BKK-CW-01', LocationID, 1
+FROM Location 
+WHERE Address = '999 Warehouse Complex, Sukhumvit Road' 
+  AND Province = 'Bangkok'
+LIMIT 1;
+
+INSERT INTO `Warehouse` (`Name`, `Code`, `LocationID`, `IsActive`)
+SELECT 'Chiang Mai Distribution Center', 'CM-DC-01', LocationID, 1
+FROM Location 
+WHERE Address = '123 Industrial Park, Hang Dong Road'
+  AND Province = 'Chiang Mai'
+LIMIT 1;
+
+INSERT INTO `Warehouse` (`Name`, `Code`, `LocationID`, `IsActive`)
+SELECT 'Phuket Hub', 'PKT-HUB-01', LocationID, 1
+FROM Location 
+WHERE Address = '456 Logistics Park, Thepkasattri Road'
+  AND Province = 'Phuket'
+LIMIT 1;
+
+INSERT INTO `Warehouse` (`Name`, `Code`, `LocationID`, `IsActive`)
+SELECT 'Khon Kaen Warehouse', 'KKN-WH-01', LocationID, 1
+FROM Location 
+WHERE Address = '789 Logistics Center, Mittraphap Road'
+  AND Province = 'Khon Kaen'
+LIMIT 1;
+
+INSERT INTO `Warehouse` (`Name`, `Code`, `LocationID`, `IsActive`)
+SELECT 'Surat Thani Logistics Center', 'SUT-LC-01', LocationID, 1
+FROM Location 
+WHERE Address = '321 Distribution Hub, Talat Road'
+  AND Province = 'Surat Thani'
+LIMIT 1;
 
 -- Insert sample banks
 INSERT INTO `Bank` (`Name`, `Code`, `IsActive`) VALUES

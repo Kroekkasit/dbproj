@@ -40,6 +40,7 @@ export const carriersAPI = {
   submitMeasurements: (parcelID, data) => axios.post(`${API_URL}/carriers/submit-measurements/${parcelID}`, data),
   getMyParcels: () => axios.get(`${API_URL}/carriers/my-parcels`),
   updateStatus: (parcelID, data) => axios.post(`${API_URL}/carriers/update-status/${parcelID}`, data),
+  getRouteStops: (parcelID) => axios.get(`${API_URL}/carriers/route-stops/${parcelID}`),
 }
 
 // Packages API

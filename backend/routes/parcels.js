@@ -237,6 +237,75 @@ router.post('/', authMiddleware, [
         [result.insertId, 'Created', 'Pending', 'Parcel created - awaiting carrier pickup', orgLocationID]
       );
 
+      // Create route for this parcel
+      const [routeResult] = await connection.execute(
+        `INSERT INTO Route (ParcelID, Status, RouteDate)
+         VALUES (?, 'Planning', DATE_ADD(NOW(), INTERVAL 1 DAY))`,
+        [result.insertId]
+      );
+      const routeID = routeResult.insertId;
+
+      // Get random warehouses (2-4 warehouses) for route stops
+      // First check how many warehouses are available
+      const [warehouseCount] = await connection.execute(
+        'SELECT COUNT(*) as count FROM Warehouse WHERE IsActive = TRUE'
+      );
+      
+      const availableWarehouseCount = warehouseCount[0].count;
+      
+      let warehouses = [];
+      if (availableWarehouseCount > 0) {
+        // Calculate random number between 2 and 4 (inclusive), but not more than available
+        const maxWarehouses = Math.min(availableWarehouseCount, 4);
+        const minWarehouses = Math.min(2, availableWarehouseCount);
+        const numberOfWarehouses = Math.floor(Math.random() * (maxWarehouses - minWarehouses + 1)) + minWarehouses;
+        
+        // MySQL doesn't support parameterized LIMIT, so we must use string interpolation
+        // But we validate numberOfWarehouses is a safe integer first
+        const safeLimit = parseInt(numberOfWarehouses, 10);
+        if (isNaN(safeLimit) || safeLimit < 1 || safeLimit > 100) {
+          throw new Error('Invalid warehouse limit value');
+        }
+        
+        // Use string interpolation for LIMIT (safe because we validated the value)
+        const warehouseQuery = `SELECT w.WarehouseID, w.Name, w.LocationID, l.Province
+                                 FROM Warehouse w
+                                 INNER JOIN Location l ON w.LocationID = l.LocationID
+                                 WHERE w.IsActive = TRUE
+                                 ORDER BY RAND()
+                                 LIMIT ${safeLimit}`;
+        
+        const [warehouseResults] = await connection.execute(warehouseQuery);
+        warehouses = warehouseResults;
+      }
+
+      // Create route stops
+      // First stop: Origin location
+      await connection.execute(
+        `INSERT INTO RouteStop (RouteID, ParcelID, LocationID, Sequence, StopStatus, ETA)
+         VALUES (?, ?, ?, 1, 'Pending', DATE_ADD(NOW(), INTERVAL 2 HOUR))`,
+        [routeID, result.insertId, orgLocationID]
+      );
+
+      // Middle stops: Random warehouses
+      let sequence = 2;
+      for (const warehouse of warehouses) {
+        const hoursOffset = sequence * 6; // Each stop 6 hours apart
+        await connection.execute(
+          `INSERT INTO RouteStop (RouteID, ParcelID, LocationID, WarehouseID, Sequence, StopStatus, ETA)
+           VALUES (?, ?, ?, ?, ?, 'Pending', DATE_ADD(NOW(), INTERVAL ? HOUR))`,
+          [routeID, result.insertId, warehouse.LocationID, warehouse.WarehouseID, sequence, hoursOffset]
+        );
+        sequence++;
+      }
+
+      // Last stop: Destination location
+      await connection.execute(
+        `INSERT INTO RouteStop (RouteID, ParcelID, LocationID, Sequence, StopStatus, ETA)
+         VALUES (?, ?, ?, ?, 'Pending', DATE_ADD(NOW(), INTERVAL ? HOUR))`,
+        [routeID, result.insertId, destLocationID, sequence, sequence * 6]
+      );
+
       await connection.commit();
 
       res.status(201).json({

@@ -23,9 +23,12 @@ const CarrierParcelDetails = () => {
     dimension_z: ''
   })
   const [submittingMeasurements, setSubmittingMeasurements] = useState(false)
+  const [routeStops, setRouteStops] = useState([])
+  const [loadingRouteStops, setLoadingRouteStops] = useState(false)
 
   useEffect(() => {
     loadParcel()
+    loadRouteStops()
   }, [parcelID])
 
   const loadParcel = async () => {
@@ -40,17 +43,70 @@ const CarrierParcelDetails = () => {
     }
   }
 
+  const loadRouteStops = async () => {
+    try {
+      setLoadingRouteStops(true)
+      const response = await carriersAPI.getRouteStops(parcelID)
+      setRouteStops(response.data.routeStops || [])
+    } catch (error) {
+      console.error('Failed to load route stops:', error)
+    } finally {
+      setLoadingRouteStops(false)
+    }
+  }
+
   const handleStatusUpdate = async (e) => {
     e.preventDefault()
     setUpdating(true)
 
     try {
+      // Check if there are pending warehouse route stops
+      const pendingWarehouseStops = routeStops.filter(rs => rs.StopStatus === 'Pending' && rs.WarehouseID)
+      if (pendingWarehouseStops.length > 0) {
+        alert('Please update all pending warehouse route stops before updating general status.')
+        setUpdating(false)
+        return
+      }
+
       await carriersAPI.updateStatus(parcelID, statusForm)
       alert('Status updated successfully!')
       setStatusForm({ eventType: '', status: '', description: '', locationID: '' })
       loadParcel()
+      loadRouteStops()
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to update status')
+      const errorMsg = error.response?.data?.message || 'Failed to update status'
+      alert(errorMsg)
+    } finally {
+      setUpdating(false)
+    }
+  }
+
+  const handleRouteStopUpdate = async (routeStopID, isLate = false) => {
+    if (!confirm(`Mark this stop as ${isLate ? 'Late' : 'Arrived'}?`)) {
+      return
+    }
+
+    setUpdating(true)
+    try {
+      const updateData = {
+        routeStopID,
+        isLate,
+        eventType: 'Warehouse Arrival',
+        status: 'In Transit',
+        description: ''
+      }
+      const response = await carriersAPI.updateStatus(parcelID, updateData)
+      if (response.data.warehouseName) {
+        alert(`Arrived at ${response.data.warehouseName} successfully!`)
+      } else {
+        alert('Status updated successfully!')
+      }
+      loadParcel()
+      loadRouteStops()
+    } catch (error) {
+      console.error('Route stop update error:', error)
+      const errorMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.msg || error.message || 'Failed to update route stop'
+      alert(errorMsg)
     } finally {
       setUpdating(false)
     }
@@ -387,8 +443,9 @@ const CarrierParcelDetails = () => {
         </div>
       )}
 
-      {/* Status Update Form */}
-      {isAssigned && !needsMeasurements && parcel.weight && (
+      {/* Status Update Form - Only show if no pending warehouse route stops */}
+      {isAssigned && !needsMeasurements && parcel.weight && 
+       routeStops.filter(rs => rs.StopStatus === 'Pending' && rs.WarehouseID).length === 0 && (
         <div className="bg-white mx-4 mt-4 rounded-lg p-4 shadow-sm">
           <h3 className="text-lg font-semibold mb-4">Update Status</h3>
           <form onSubmit={handleStatusUpdate} className="space-y-3">
@@ -448,6 +505,80 @@ const CarrierParcelDetails = () => {
               {updating ? 'Updating...' : 'Update Status'}
             </button>
           </form>
+        </div>
+      )}
+
+      {/* Route Stops Section */}
+      {isAssigned && routeStops.length > 0 && (
+        <div className="bg-white mx-4 mt-4 rounded-lg p-4 shadow-sm">
+          <h2 className="text-lg font-semibold mb-4">Route Stops</h2>
+          {routeStops.filter(rs => rs.StopStatus === 'Pending' && rs.WarehouseID).length > 0 && (
+            <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+              <strong>Note:</strong> You have pending warehouse stops. Please update route stops before updating general status.
+            </div>
+          )}
+          <div className="space-y-3">
+            {routeStops.map((stop, index) => (
+              <div
+                key={stop.StopID}
+                className={`border-l-4 pl-3 py-2 ${
+                  stop.StopStatus === 'Completed'
+                    ? 'border-green-500'
+                    : stop.StopStatus === 'Late'
+                    ? 'border-red-500'
+                    : 'border-gray-300'
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="font-medium text-sm">
+                      {stop.Sequence}. {stop.WarehouseName || 'Location'}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      {stop.Address}, {stop.District}, {stop.Province}
+                    </div>
+                    {stop.ETA && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        ETA: {formatDateTime(stop.ETA)}
+                      </div>
+                    )}
+                    {stop.AAT && (
+                      <div className="text-xs text-green-600 mt-1">
+                        Arrived: {formatDateTime(stop.AAT)}
+                      </div>
+                    )}
+                    <div className="text-xs mt-1">
+                      Status: <span className={`font-medium ${
+                        stop.StopStatus === 'Completed' ? 'text-green-600' :
+                        stop.StopStatus === 'Late' ? 'text-red-600' :
+                        'text-gray-600'
+                      }`}>
+                        {stop.StopStatus}
+                      </span>
+                    </div>
+                  </div>
+                  {stop.StopStatus === 'Pending' && stop.WarehouseID && (
+                    <div className="flex gap-2 ml-2">
+                      <button
+                        onClick={() => handleRouteStopUpdate(stop.StopID, false)}
+                        disabled={updating}
+                        className="px-3 py-1 bg-green-500 text-white text-xs rounded hover:bg-green-600 disabled:opacity-50"
+                      >
+                        Arrived
+                      </button>
+                      <button
+                        onClick={() => handleRouteStopUpdate(stop.StopID, true)}
+                        disabled={updating}
+                        className="px-3 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600 disabled:opacity-50"
+                      >
+                        Late
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

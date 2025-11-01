@@ -223,11 +223,27 @@ router.put('/me', authMiddleware, [
             [req.user.userID, oldLocationID]
           );
           // Delete old location if no one else is using it
+          // Check if any other users are using this location, or if it's used by parcels, warehouses, or route stops
           const [otherUsers] = await connection.execute(
             'SELECT COUNT(*) as count FROM UserLocation WHERE LocationID = ?',
             [oldLocationID]
           );
-          if (otherUsers[0].count === 0) {
+          const [parcelLocations] = await connection.execute(
+            'SELECT COUNT(*) as count FROM ParcelLocation WHERE LocationID = ?',
+            [oldLocationID]
+          );
+          const [warehouses] = await connection.execute(
+            'SELECT COUNT(*) as count FROM Warehouse WHERE LocationID = ?',
+            [oldLocationID]
+          );
+          const [routeStops] = await connection.execute(
+            'SELECT COUNT(*) as count FROM RouteStop WHERE LocationID = ?',
+            [oldLocationID]
+          );
+          
+          // Only delete if not used by anyone/anything else
+          if (otherUsers[0].count === 0 && parcelLocations[0].count === 0 && 
+              warehouses[0].count === 0 && routeStops[0].count === 0) {
             await connection.execute('DELETE FROM Location WHERE LocationID = ?', [oldLocationID]);
           }
         }
@@ -436,14 +452,29 @@ router.delete('/:userLocationID', authMiddleware, async (req, res) => {
       [userLocationID]
     );
 
-    // Check if any other users are using this location
+    // Check if any other users are using this location, or if it's used by parcels, warehouses, or route stops
     const [otherUsers] = await pool.execute(
       'SELECT COUNT(*) as count FROM UserLocation WHERE LocationID = ?',
       [locationID]
     );
+    const [parcelLocations] = await pool.execute(
+      'SELECT COUNT(*) as count FROM ParcelLocation WHERE LocationID = ?',
+      [locationID]
+    );
+    const [warehouses] = await pool.execute(
+      'SELECT COUNT(*) as count FROM Warehouse WHERE LocationID = ?',
+      [locationID]
+    );
+    const [routeStops] = await pool.execute(
+      'SELECT COUNT(*) as count FROM RouteStop WHERE LocationID = ?',
+      [locationID]
+    );
 
-    // Note: We don't delete the Location itself even if no one uses it,
-    // as it might be used by parcels. Location cleanup can be done separately if needed.
+    // Only delete if not used by anyone/anything else
+    if (otherUsers[0].count === 0 && parcelLocations[0].count === 0 && 
+        warehouses[0].count === 0 && routeStops[0].count === 0) {
+      await pool.execute('DELETE FROM Location WHERE LocationID = ?', [locationID]);
+    }
 
     res.json({ message: 'Address deleted successfully' });
   } catch (error) {
