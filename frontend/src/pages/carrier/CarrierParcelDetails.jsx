@@ -277,21 +277,42 @@ const CarrierParcelDetails = () => {
           )}
 
           {parcel.weight ? (
-            <div className="grid grid-cols-2 gap-4 pt-3 border-t">
-              <div>
-                <div className="text-sm text-gray-500">Weight</div>
-                <div className="font-medium">{parcel.weight} kg</div>
-              </div>
-              <div>
-                <div className="text-sm text-gray-500">Dimensions</div>
-                <div className="font-medium">
-                  {parcel.dimension_x} × {parcel.dimension_y} × {parcel.dimension_z} cm
+            <div className="pt-3 border-t space-y-3">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="text-sm text-gray-500">Weight</div>
+                  <div className="font-medium">{parcel.weight} kg</div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-500">Dimensions</div>
+                  <div className="font-medium">
+                    {parcel.dimension_x} × {parcel.dimension_y} × {parcel.dimension_z} cm
+                  </div>
                 </div>
               </div>
               {parcel.Price && (
-                <div className="col-span-2 pt-2 border-t">
-                  <div className="text-sm text-gray-500">Final Price</div>
-                  <div className="font-semibold text-primary text-lg">฿{parseFloat(parcel.Price).toFixed(2)}</div>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3">Price Breakdown</h3>
+                  <div className="space-y-2">
+                    {parcel.PackagePrice && parseFloat(parcel.PackagePrice) > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600">Package Price</span>
+                        <span className="font-semibold">฿{parseFloat(parcel.PackagePrice).toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-600">Delivery Price</span>
+                      <span className="font-semibold text-blue-600">
+                        ฿{parseFloat(parcel.Price).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t border-blue-300">
+                      <span className="font-semibold text-lg">Total Price</span>
+                      <span className="font-bold text-primary text-xl">
+                        ฿{(parseFloat(parcel.Price) + (parseFloat(parcel.PackagePrice) || 0)).toFixed(2)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

@@ -26,6 +26,8 @@ const SenderCreateParcel = () => {
   const [balance, setBalance] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [priceInfo, setPriceInfo] = useState(null)
+  const [calculatingPrice, setCalculatingPrice] = useState(false)
 
   const itemTypes = ['Food', 'Frozen', 'Electronics', 'Clothing', 'Documents', 'Other']
 
@@ -60,6 +62,37 @@ const SenderCreateParcel = () => {
     })
   }
 
+  // Calculate price when relevant form data changes
+  useEffect(() => {
+    const calculatePrice = async () => {
+      // Only calculate if we have minimum required fields
+      if (!formData.destProvince || !formData.orgLocationID) {
+        setPriceInfo(null)
+        return
+      }
+
+      setCalculatingPrice(true)
+      try {
+        const response = await parcelsAPI.calculate({
+          orgLocationID: parseInt(formData.orgLocationID),
+          destProvince: formData.destProvince,
+          SelectedPackageID: formData.SelectedPackageID,
+          useOwnPackage: formData.useOwnPackage
+        })
+        setPriceInfo(response.data)
+      } catch (error) {
+        console.error('Failed to calculate price:', error)
+        setPriceInfo(null)
+      } finally {
+        setCalculatingPrice(false)
+      }
+    }
+
+    // Debounce calculation
+    const timeoutId = setTimeout(calculatePrice, 300)
+    return () => clearTimeout(timeoutId)
+  }, [formData.orgLocationID, formData.destProvince, formData.SelectedPackageID, formData.useOwnPackage])
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError('')
@@ -91,8 +124,6 @@ const SenderCreateParcel = () => {
       setLoading(false)
     }
   }
-
-  const selectedPackage = packages.find(p => p.PackageTypeID === formData.SelectedPackageID)
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -228,16 +259,6 @@ const SenderCreateParcel = () => {
                       </label>
                     ))}
                   </div>
-                  {selectedPackage && (
-                    <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                      <div className="text-sm text-gray-600">
-                        Package price: <span className="font-semibold text-primary">฿{parseFloat(selectedPackage.Price).toFixed(2)}</span>
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        Final delivery price will be calculated by carrier after pickup
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -354,6 +375,63 @@ const SenderCreateParcel = () => {
               </div>
             </div>
           </div>
+
+          {/* Price Calculation */}
+          {(priceInfo || calculatingPrice) && (
+            <div className="bg-white rounded-lg p-4 shadow-sm border-2 border-primary">
+              <h2 className="text-lg font-semibold mb-3">Price Calculation</h2>
+              {calculatingPrice ? (
+                <div className="text-sm text-gray-600">Calculating...</div>
+              ) : priceInfo ? (
+                <div className="space-y-2">
+                  {priceInfo.packagePrice > 0 && (
+                    <div className="flex justify-between items-center py-2 border-b">
+                      <span className="text-sm text-gray-600">Package Price</span>
+                      <span className="font-semibold">฿{priceInfo.packagePrice.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {priceInfo.estimatedDeliveryPrice !== null ? (
+                    <>
+                      <div className="flex justify-between items-center py-2 border-b">
+                        <span className="text-sm text-gray-600">Estimated Delivery Price</span>
+                        <span className="font-semibold text-blue-600">฿{priceInfo.estimatedDeliveryPrice.toFixed(2)}</span>
+                      </div>
+                      {priceInfo.estimatedDeliveryDate && (
+                        <div className="text-xs text-gray-500 mt-2">
+                          Estimated delivery: {new Date(priceInfo.estimatedDeliveryDate).toLocaleDateString('en-US', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric'
+                          })}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="py-2 border-b">
+                      <span className="text-sm text-gray-600">
+                        {formData.useOwnPackage 
+                          ? 'Delivery price will be calculated after carrier measures the parcel'
+                          : 'Delivery price will be calculated after carrier measures the weight'}
+                      </span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center pt-2 border-t-2 border-gray-300">
+                    <span className="font-semibold text-lg">Total</span>
+                    <span className="font-bold text-primary text-xl">
+                      {priceInfo.totalPrice > 0 
+                        ? `฿${priceInfo.totalPrice.toFixed(2)}`
+                        : 'TBD'}
+                    </span>
+                  </div>
+                  {priceInfo.packagePrice > 0 && priceInfo.estimatedDeliveryPrice === null && (
+                    <div className="text-xs text-gray-500 mt-2 p-2 bg-blue-50 rounded">
+                      ⓘ You will be charged ฿{priceInfo.packagePrice.toFixed(2)} for the package now. Delivery price will be calculated and charged after pickup.
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          )}
 
           {/* Submit */}
           <button

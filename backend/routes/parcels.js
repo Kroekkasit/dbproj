@@ -17,48 +17,128 @@ const generateTrackingNumber = () => {
 };
 
 // Calculate price and delivery date (preview)
-router.post('/calculate', authMiddleware, [
-  body('weight').isFloat({ min: 0.1 }),
-  body('dimension_x').isFloat({ min: 0.1 }),
-  body('dimension_y').isFloat({ min: 0.1 }),
-  body('dimension_z').isFloat({ min: 0.1 }),
-  body('destProvince').notEmpty()
-], async (req, res) => {
+router.post('/calculate', authMiddleware, async (req, res) => {
   try {
     if (req.user.type !== 'sender') {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+    const { 
+      orgLocationID, 
+      destProvince, 
+      SelectedPackageID, 
+      useOwnPackage,
+      weight, 
+      dimension_x, 
+      dimension_y, 
+      dimension_z 
+    } = req.body;
+
+    if (!destProvince) {
+      return res.status(400).json({ message: 'Destination province is required' });
     }
 
-    const { weight, dimension_x, dimension_y, dimension_z, destProvince } = req.body;
-
-    // Get user's origin province from their most recent location
-    const [userLocations] = await pool.execute(
-      `SELECT l.Province
-       FROM UserLocation ul
-       INNER JOIN Location l ON ul.LocationID = l.LocationID
-       WHERE ul.UserID = ?
-       ORDER BY ul.CreatedAt DESC
-       LIMIT 1`,
-      [req.user.userID]
-    );
-
-    if (userLocations.length === 0 || !userLocations[0].Province) {
-      return res.status(400).json({ message: 'Please add your address with province first' });
+    let originProvince;
+    
+    // Get origin province from selected location or user's most recent location
+    if (orgLocationID) {
+      const [orgLocations] = await pool.execute(
+        `SELECT l.Province 
+         FROM Location l
+         INNER JOIN UserLocation ul ON l.LocationID = ul.LocationID
+         WHERE l.LocationID = ? AND ul.UserID = ?`,
+        [orgLocationID, req.user.userID]
+      );
+      
+      if (orgLocations.length > 0 && orgLocations[0].Province) {
+        originProvince = orgLocations[0].Province;
+      }
     }
 
-    const originProvince = userLocations[0].Province;
+    // Fallback to user's most recent location if orgLocationID not provided or not found
+    if (!originProvince) {
+      const [userLocations] = await pool.execute(
+        `SELECT l.Province
+         FROM UserLocation ul
+         INNER JOIN Location l ON ul.LocationID = l.LocationID
+         WHERE ul.UserID = ?
+         ORDER BY ul.CreatedAt DESC
+         LIMIT 1`,
+        [req.user.userID]
+      );
 
-    const price = await calculatePrice(weight, dimension_x, dimension_y, dimension_z, originProvince, destProvince);
-    const deliveryDate = await calculateDeliveryDate(originProvince, destProvince);
+      if (userLocations.length === 0 || !userLocations[0].Province) {
+        return res.status(400).json({ message: 'Please select a pickup location or add your address with province first' });
+      }
+      originProvince = userLocations[0].Province;
+    }
+
+    // Calculate package price
+    let packagePrice = 0;
+    let packageDimensions = null;
+    
+    if (!useOwnPackage && SelectedPackageID) {
+      const [packages] = await pool.execute(
+        'SELECT Price, dimension_x, dimension_y, dimension_z FROM PackageType WHERE PackageTypeID = ? AND IsActive = TRUE',
+        [SelectedPackageID]
+      );
+      
+      if (packages.length > 0) {
+        packagePrice = parseFloat(packages[0].Price);
+        packageDimensions = {
+          dimension_x: packages[0].dimension_x,
+          dimension_y: packages[0].dimension_y,
+          dimension_z: packages[0].dimension_z
+        };
+      }
+    }
+
+    // Determine dimensions to use for delivery price calculation
+    let finalDimensionX, finalDimensionY, finalDimensionZ;
+    let finalWeight;
+    
+    // If package selected, use package dimensions
+    if (packageDimensions) {
+      finalDimensionX = packageDimensions.dimension_x;
+      finalDimensionY = packageDimensions.dimension_y;
+      finalDimensionZ = packageDimensions.dimension_z;
+    } else if (dimension_x && dimension_y && dimension_z) {
+      // Use provided dimensions
+      finalDimensionX = parseFloat(dimension_x);
+      finalDimensionY = parseFloat(dimension_y);
+      finalDimensionZ = parseFloat(dimension_z);
+    }
+
+    // Weight is optional for estimation
+    if (weight) {
+      finalWeight = parseFloat(weight);
+    }
+
+    // Calculate delivery price only if we have all required parameters
+    let estimatedDeliveryPrice = null;
+    let estimatedDeliveryDate = null;
+    
+    if (finalWeight && finalDimensionX && finalDimensionY && finalDimensionZ) {
+      estimatedDeliveryPrice = await calculatePrice(
+        finalWeight, 
+        finalDimensionX, 
+        finalDimensionY, 
+        finalDimensionZ, 
+        originProvince, 
+        destProvince
+      );
+      estimatedDeliveryDate = await calculateDeliveryDate(originProvince, destProvince);
+    }
+
+    // Calculate total price
+    const totalPrice = packagePrice + (estimatedDeliveryPrice || 0);
 
     res.json({
-      price,
-      estimatedDeliveryDate: deliveryDate.toISOString()
+      packagePrice,
+      estimatedDeliveryPrice,
+      totalPrice,
+      estimatedDeliveryDate: estimatedDeliveryDate ? estimatedDeliveryDate.toISOString() : null,
+      canCalculateDeliveryPrice: !!(finalWeight && finalDimensionX && finalDimensionY && finalDimensionZ)
     });
   } catch (error) {
     console.error(error);
@@ -377,7 +457,7 @@ router.get('/track/:trackingNumber', async (req, res) => {
        LEFT JOIN Location dl ON pdl.LocationID = dl.LocationID
        LEFT JOIN ParcelAssignment pa ON p.ParcelID = pa.ParcelID
        WHERE p.TrackingNumber = ?`,
-      [trackingNumber]
+      [trackingNumber]  
     );
 
     if (parcels.length === 0) {
