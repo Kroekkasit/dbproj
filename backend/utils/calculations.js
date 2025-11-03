@@ -87,6 +87,116 @@ const calculateDeliveryDate = async (originProvince, destProvince) => {
   }
 };
 
+// Get delivery plan by ID
+const getDeliveryPlan = async (planID) => {
+  try {
+    const [plans] = await pool.execute(
+      'SELECT * FROM DeliveryPlan WHERE PlanID = ? AND IsActive = TRUE',
+      [planID]
+    );
+    return plans.length > 0 ? plans[0] : null;
+  } catch (error) {
+    console.error('Error getting delivery plan:', error);
+    return null;
+  }
+};
+
+// Get default delivery plan (Standard)
+const getDefaultDeliveryPlan = async () => {
+  try {
+    const [plans] = await pool.execute(
+      'SELECT * FROM DeliveryPlan WHERE Name = "Standard" AND IsActive = TRUE LIMIT 1'
+    );
+    return plans.length > 0 ? plans[0] : null;
+  } catch (error) {
+    console.error('Error getting default delivery plan:', error);
+    return null;
+  }
+};
+
+// Calculate price with delivery plan
+const calculatePriceWithPlan = async (weight, dimension_x, dimension_y, dimension_z, originProvince, destProvince, planID = null) => {
+  // Calculate base price
+  const basePrice = await calculatePrice(weight, dimension_x, dimension_y, dimension_z, originProvince, destProvince);
+  
+  // Get delivery plan
+  let plan = null;
+  if (planID) {
+    plan = await getDeliveryPlan(planID);
+  }
+  if (!plan) {
+    plan = await getDefaultDeliveryPlan();
+  }
+  
+  // Add fast delivery fee if plan is Fast
+  const fastDeliveryFee = plan && plan.Name === 'Fast' ? parseFloat(plan.FastDeliveryFee) : 0.00;
+  const totalPrice = basePrice + fastDeliveryFee;
+  
+  return {
+    basePrice: Math.round(basePrice * 100) / 100,
+    fastDeliveryFee: Math.round(fastDeliveryFee * 100) / 100,
+    totalPrice: Math.round(totalPrice * 100) / 100,
+    plan
+  };
+};
+
+// Calculate delivery date with plan
+const calculateDeliveryDateWithPlan = async (originProvince, destProvince, planID = null) => {
+  // Get base delivery date
+  const baseDeliveryDate = await calculateDeliveryDate(originProvince, destProvince);
+  
+  // Get delivery plan
+  let plan = null;
+  if (planID) {
+    plan = await getDeliveryPlan(planID);
+  }
+  if (!plan) {
+    plan = await getDefaultDeliveryPlan();
+  }
+  
+  // Reduce days if Fast plan
+  const deliveryDate = new Date(baseDeliveryDate);
+  if (plan && plan.Name === 'Fast') {
+    deliveryDate.setDate(deliveryDate.getDate() - plan.DeliveryDaysReduction);
+  }
+  
+  return deliveryDate;
+};
+
+// Calculate service fees
+const calculateServiceFees = async (serviceIDs = []) => {
+  if (!serviceIDs || serviceIDs.length === 0) {
+    return {
+      services: [],
+      totalServiceFee: 0.00
+    };
+  }
+  
+  try {
+    const placeholders = serviceIDs.map(() => '?').join(',');
+    const [services] = await pool.execute(
+      `SELECT * FROM OptionalService WHERE ServiceID IN (${placeholders}) AND IsActive = TRUE`,
+      serviceIDs
+    );
+    
+    let totalServiceFee = 0.00;
+    services.forEach(service => {
+      totalServiceFee += parseFloat(service.ServiceFee);
+    });
+    
+    return {
+      services,
+      totalServiceFee: Math.round(totalServiceFee * 100) / 100
+    };
+  } catch (error) {
+    console.error('Error calculating service fees:', error);
+    return {
+      services: [],
+      totalServiceFee: 0.00
+    };
+  }
+};
+
 // Calculate price before creating parcel (for preview)
 const previewPrice = async (weight, dimension_x, dimension_y, dimension_z, originProvince, destProvince) => {
   const price = await calculatePrice(weight, dimension_x, dimension_y, dimension_z, originProvince, destProvince);
@@ -101,6 +211,11 @@ const previewPrice = async (weight, dimension_x, dimension_y, dimension_z, origi
 module.exports = {
   calculatePrice,
   calculateDeliveryDate,
-  previewPrice
+  previewPrice,
+  getDeliveryPlan,
+  getDefaultDeliveryPlan,
+  calculatePriceWithPlan,
+  calculateDeliveryDateWithPlan,
+  calculateServiceFees
 };
 

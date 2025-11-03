@@ -176,7 +176,11 @@ const SenderHome = () => {
                     <div className="text-sm text-gray-600">{getStatusText(parcel.Status)}. {formatDate(parcel.CreatedAt)}</div>
                     {parcel.Price ? (
                       <div className="text-sm font-semibold text-primary mt-1">
-                        Total: ฿{(parseFloat(parcel.Price || 0) + parseFloat(parcel.PackagePrice || 0)).toFixed(2)}
+                        Total: ฿{(
+                          parseFloat(parcel.Price || 0) + 
+                          parseFloat(parcel.PackagePrice || 0) + 
+                          parseFloat(parcel.ServiceFee || 0)
+                        ).toFixed(2)}
                       </div>
                     ) : (
                       <div className="text-sm text-yellow-600 italic mt-1">
@@ -238,9 +242,21 @@ const SenderHome = () => {
                   <div className="flex-1">
                     <div className="font-semibold text-gray-800">#{parcel.TrackingNumber}</div>
                     <div className="text-sm text-gray-600">{getStatusText(parcel.Status)}. {formatDate(parcel.CreatedAt)}</div>
-                    {parcel.Price && (
+                    {parcel.Price ? (
                       <div className="text-sm font-semibold text-primary mt-1">
-                        Price: ฿{parseFloat(parcel.Price).toFixed(2)}
+                        Total: ฿{(
+                          parseFloat(parcel.Price || 0) + 
+                          parseFloat(parcel.PackagePrice || 0) + 
+                          parseFloat(parcel.ServiceFee || 0)
+                        ).toFixed(2)}
+                      </div>
+                    ) : (
+                      <div className="text-sm text-gray-500 mt-1">
+                        {(parcel.PackagePrice > 0 || parcel.ServiceFee > 0) && (
+                          <span className="text-xs">
+                            Upfront: ฿{(parseFloat(parcel.PackagePrice || 0) + parseFloat(parcel.ServiceFee || 0)).toFixed(2)}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>

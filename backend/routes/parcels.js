@@ -2,7 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const pool = require('../config/database');
 const authMiddleware = require('../middleware/auth');
-const { calculatePrice, calculateDeliveryDate } = require('../utils/calculations');
+const { calculatePrice, calculateDeliveryDate, calculatePriceWithPlan, calculateDeliveryDateWithPlan, calculateServiceFees } = require('../utils/calculations');
 
 const router = express.Router();
 
@@ -31,7 +31,9 @@ router.post('/calculate', authMiddleware, async (req, res) => {
       weight, 
       dimension_x, 
       dimension_y, 
-      dimension_z 
+      dimension_z,
+      deliveryPlanID,
+      selectedServiceIDs
     } = req.body;
 
     if (!destProvince) {
@@ -114,31 +116,55 @@ router.post('/calculate', authMiddleware, async (req, res) => {
       finalWeight = parseFloat(weight);
     }
 
+    // Calculate service fees if services are selected (always calculate, regardless of delivery price availability)
+    let selectedServices = [];
+    let serviceFee = 0;
+    if (selectedServiceIDs && Array.isArray(selectedServiceIDs) && selectedServiceIDs.length > 0) {
+      const serviceResult = await calculateServiceFees(selectedServiceIDs);
+      selectedServices = serviceResult.services;
+      serviceFee = serviceResult.totalServiceFee;
+    }
+
     // Calculate delivery price only if we have all required parameters
-    let estimatedDeliveryPrice = null;
+    let baseDeliveryPrice = null;
+    let fastDeliveryFee = 0;
     let estimatedDeliveryDate = null;
+    let plan = null;
     
     if (finalWeight && finalDimensionX && finalDimensionY && finalDimensionZ) {
-      estimatedDeliveryPrice = await calculatePrice(
+      // Calculate price with plan
+      const priceResult = await calculatePriceWithPlan(
         finalWeight, 
         finalDimensionX, 
         finalDimensionY, 
         finalDimensionZ, 
         originProvince, 
-        destProvince
+        destProvince,
+        deliveryPlanID
       );
-      estimatedDeliveryDate = await calculateDeliveryDate(originProvince, destProvince);
+      
+      baseDeliveryPrice = priceResult.basePrice;
+      fastDeliveryFee = priceResult.fastDeliveryFee;
+      plan = priceResult.plan;
+      
+      // Calculate delivery date with plan
+      estimatedDeliveryDate = await calculateDeliveryDateWithPlan(originProvince, destProvince, deliveryPlanID);
     }
 
-    // Calculate total price
-    const totalPrice = packagePrice + (estimatedDeliveryPrice || 0);
+    // Calculate total price (always include package price and service fees, even if delivery price not available yet)
+    const deliveryPrice = baseDeliveryPrice ? (baseDeliveryPrice + fastDeliveryFee) : 0;
+    const totalPrice = packagePrice + deliveryPrice + serviceFee;
 
     res.json({
       packagePrice,
-      estimatedDeliveryPrice,
+      baseDeliveryPrice,
+      fastDeliveryFee,
+      serviceFee,
       totalPrice,
       estimatedDeliveryDate: estimatedDeliveryDate ? estimatedDeliveryDate.toISOString() : null,
-      canCalculateDeliveryPrice: !!(finalWeight && finalDimensionX && finalDimensionY && finalDimensionZ)
+      canCalculateDeliveryPrice: !!(finalWeight && finalDimensionX && finalDimensionY && finalDimensionZ),
+      deliveryPlan: plan,
+      selectedServices: selectedServices
     });
   } catch (error) {
     console.error(error);
@@ -194,7 +220,9 @@ router.post('/', authMiddleware, [
       destCountry = 'Thailand',
       itemType,
       SelectedPackageID,
-      useOwnPackage
+      useOwnPackage,
+      deliveryPlanID,
+      selectedServiceIDs
     } = req.body;
 
     // Check user balance and validate selected origin location
@@ -245,29 +273,6 @@ router.post('/', authMiddleware, [
 
         packagePrice = parseFloat(packages[0].Price);
         selectedPackageId = SelectedPackageID;
-
-        // Check if user has sufficient balance for package
-        if (users[0].balance < packagePrice) {
-          await connection.rollback();
-          return res.status(400).json({ 
-            message: 'Insufficient balance for package',
-            required: packagePrice,
-            current: users[0].balance
-          });
-        }
-
-        // Deduct package price
-        await connection.execute(
-          'UPDATE User SET balance = balance - ? WHERE UserID = ?',
-          [packagePrice, req.user.userID]
-        );
-
-        // Create transaction record for package
-        await connection.execute(
-          `INSERT INTO Transaction (UserID, Type, Amount, Status, Description)
-           VALUES (?, ?, ?, ?, ?)`,
-          [req.user.userID, 'Package', packagePrice, 'Completed', `Package purchase for parcel ${trackingNumber}`]
-        );
       }
 
       // Check if destination location already exists
@@ -292,13 +297,112 @@ router.post('/', authMiddleware, [
         destLocationID = destLocationResult.insertId;
       }
 
-      // Create parcel WITHOUT price (will be calculated after carrier measures)
+      // Get delivery plan and calculate fees
+      let planID = null;
+      let fastDeliveryFee = 0;
+      let serviceFee = 0;
+      
+      // Get default plan if not provided
+      if (deliveryPlanID) {
+        planID = deliveryPlanID;
+        const [plans] = await connection.execute(
+          'SELECT * FROM DeliveryPlan WHERE PlanID = ? AND IsActive = TRUE',
+          [planID]
+        );
+        if (plans.length > 0 && plans[0].Name === 'Fast') {
+          fastDeliveryFee = parseFloat(plans[0].FastDeliveryFee);
+        }
+      } else {
+        // Get default Standard plan
+        const [defaultPlans] = await connection.execute(
+          'SELECT PlanID FROM DeliveryPlan WHERE Name = "Standard" AND IsActive = TRUE LIMIT 1'
+        );
+        if (defaultPlans.length > 0) {
+          planID = defaultPlans[0].PlanID;
+        }
+      }
+      
+      // Calculate service fees if services are selected
+      if (selectedServiceIDs && Array.isArray(selectedServiceIDs) && selectedServiceIDs.length > 0) {
+        const placeholders = selectedServiceIDs.map(() => '?').join(',');
+        const [services] = await connection.execute(
+          `SELECT ServiceID, ServiceFee FROM OptionalService WHERE ServiceID IN (${placeholders}) AND IsActive = TRUE`,
+          selectedServiceIDs
+        );
+        
+        services.forEach(service => {
+          serviceFee += parseFloat(service.ServiceFee);
+        });
+      }
+
+      // Check if user has sufficient balance for package + service fees
+      const totalUpfrontCost = packagePrice + serviceFee;
+      const userBalance = parseFloat(users[0].balance) || 0;
+      if (userBalance < totalUpfrontCost) {
+        await connection.rollback();
+        return res.status(400).json({ 
+          message: 'Insufficient balance',
+          required: parseFloat(totalUpfrontCost),
+          current: parseFloat(userBalance),
+          breakdown: {
+            packagePrice: parseFloat(packagePrice),
+            serviceFee: parseFloat(serviceFee),
+            total: parseFloat(totalUpfrontCost)
+          }
+        });
+      }
+
+      // Deduct package price and service fees from balance
+      if (totalUpfrontCost > 0) {
+        await connection.execute(
+          'UPDATE User SET balance = balance - ? WHERE UserID = ?',
+          [totalUpfrontCost, req.user.userID]
+        );
+
+        // Create transaction records
+        if (packagePrice > 0) {
+          await connection.execute(
+            `INSERT INTO Transaction (UserID, Type, Amount, Status, Description)
+             VALUES (?, ?, ?, ?, ?)`,
+            [req.user.userID, 'Package', packagePrice, 'Completed', `Package purchase for parcel ${trackingNumber}`]
+          );
+        }
+
+        if (serviceFee > 0) {
+          await connection.execute(
+            `INSERT INTO Transaction (UserID, Type, Amount, Status, Description)
+             VALUES (?, ?, ?, ?, ?)`,
+            [req.user.userID, 'Service', serviceFee, 'Completed', `Optional service fees for parcel ${trackingNumber}`]
+          );
+        }
+      }
+
+      // Create parcel WITHOUT delivery price (will be calculated after carrier measures)
+      // But save plan and service fees
       const [result] = await connection.execute(
         `INSERT INTO Parcel (SenderID, TrackingNumber, receiverName, receiverPhone, 
-         itemType, SelectedPackageID, PackagePrice, Status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending')`,
-        [req.user.userID, trackingNumber, receiverName, receiverPhone, itemType, selectedPackageId, packagePrice]
+         itemType, SelectedPackageID, PackagePrice, DeliveryPlanID, FastDeliveryFee, ServiceFee, Status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
+        [req.user.userID, trackingNumber, receiverName, receiverPhone, itemType, selectedPackageId, packagePrice, planID, fastDeliveryFee, serviceFee]
       );
+      
+      // Create ParcelService entries for selected services
+      if (selectedServiceIDs && Array.isArray(selectedServiceIDs) && selectedServiceIDs.length > 0) {
+        for (const serviceID of selectedServiceIDs) {
+          // Get service fee for this specific service
+          const [services] = await connection.execute(
+            'SELECT ServiceFee FROM OptionalService WHERE ServiceID = ? AND IsActive = TRUE',
+            [serviceID]
+          );
+          
+          if (services.length > 0) {
+            await connection.execute(
+              'INSERT INTO ParcelService (ParcelID, ServiceID, ServiceFee) VALUES (?, ?, ?)',
+              [result.insertId, serviceID, parseFloat(services[0].ServiceFee)]
+            );
+          }
+        }
+      }
 
       // Create ParcelLocation associations
       await connection.execute(
@@ -420,7 +524,8 @@ router.get('/sender', authMiddleware, async (req, res) => {
        ol.Address as orgAddress, ol.District as orgDistrict, ol.Province as orgProvince,
        dl.Address as destAddress, dl.District as destDistrict, dl.Province as destProvince,
        pa.Status as assignmentStatus, pa.CarrierID,
-       c.firstname as carrierFirstName, c.lastname as carrierLastName
+       c.firstname as carrierFirstName, c.lastname as carrierLastName,
+       dp.Name as deliveryPlanName, dp.Description as deliveryPlanDescription
        FROM Parcel p
        LEFT JOIN ParcelLocation pol ON p.ParcelID = pol.ParcelID AND pol.LocationType = 'Origin'
        LEFT JOIN Location ol ON pol.LocationID = ol.LocationID
@@ -428,10 +533,23 @@ router.get('/sender', authMiddleware, async (req, res) => {
        LEFT JOIN Location dl ON pdl.LocationID = dl.LocationID
        LEFT JOIN ParcelAssignment pa ON p.ParcelID = pa.ParcelID
        LEFT JOIN Carrier c ON pa.CarrierID = c.CarrierID
+       LEFT JOIN DeliveryPlan dp ON p.DeliveryPlanID = dp.PlanID
        WHERE p.SenderID = ?
        ORDER BY p.CreatedAt DESC`,
       [req.user.userID]
     );
+
+    // Get service information for each parcel
+    for (let parcel of parcels) {
+      const [services] = await pool.execute(
+        `SELECT os.Name, os.Description, os.ServiceFee, ps.ServiceFee as AppliedServiceFee
+         FROM ParcelService ps
+         INNER JOIN OptionalService os ON ps.ServiceID = os.ServiceID
+         WHERE ps.ParcelID = ?`,
+        [parcel.ParcelID]
+      );
+      parcel.services = services;
+    }
 
     res.json({ parcels });
   } catch (error) {
@@ -500,7 +618,8 @@ router.get('/:parcelID', authMiddleware, async (req, res) => {
        c.firstname as carrierFirstName, c.lastname as carrierLastName,
        pt.Name as packageName, pt.Type as packageType, pt.Size as packageSize,
        pt.dimension_x as packageDimensionX, pt.dimension_y as packageDimensionY, pt.dimension_z as packageDimensionZ,
-       pt.Price as packageTypePrice
+       pt.Price as packageTypePrice,
+       dp.Name as deliveryPlanName, dp.Description as deliveryPlanDescription
        FROM Parcel p
        LEFT JOIN ParcelLocation pol ON p.ParcelID = pol.ParcelID AND pol.LocationType = 'Origin'
        LEFT JOIN Location ol ON pol.LocationID = ol.LocationID
@@ -509,6 +628,7 @@ router.get('/:parcelID', authMiddleware, async (req, res) => {
        LEFT JOIN ParcelAssignment pa ON p.ParcelID = pa.ParcelID
        LEFT JOIN Carrier c ON pa.CarrierID = c.CarrierID
        LEFT JOIN PackageType pt ON p.SelectedPackageID = pt.PackageTypeID
+       LEFT JOIN DeliveryPlan dp ON p.DeliveryPlanID = dp.PlanID
        WHERE p.ParcelID = ?`,
       [parcelID]
     );
@@ -532,8 +652,22 @@ router.get('/:parcelID', authMiddleware, async (req, res) => {
       [parcelID]
     );
 
+    // Get service information for the parcel
+    const [services] = await pool.execute(
+      `SELECT os.Name, os.Description, os.ServiceFee, os.CoverageAmount, ps.ServiceFee as AppliedServiceFee
+       FROM ParcelService ps
+       INNER JOIN OptionalService os ON ps.ServiceID = os.ServiceID
+       WHERE ps.ParcelID = ?`,
+      [parcelID]
+    );
+
+    const parcel = parcels[0];
+    if (parcel) {
+      parcel.services = services;
+    }
+
     res.json({
-      parcel: parcels[0],
+      parcel: parcel,
       events
     });
   } catch (error) {

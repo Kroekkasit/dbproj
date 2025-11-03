@@ -127,7 +127,20 @@ const SenderHistory = () => {
                     </div>
                     <div className="text-right">
                       {parcel.Price && (
-                        <div className="text-primary font-semibold">฿{parseFloat(parcel.Price).toFixed(2)}</div>
+                        <>
+                          <div className="text-primary font-semibold">
+                            ฿{(
+                              parseFloat(parcel.Price || 0) + 
+                              parseFloat(parcel.PackagePrice || 0) + 
+                              parseFloat(parcel.ServiceFee || 0)
+                            ).toFixed(2)}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {parcel.PackagePrice > 0 && `Pkg: ฿${parseFloat(parcel.PackagePrice).toFixed(2)}`}
+                            {parcel.ServiceFee > 0 && `${parcel.PackagePrice > 0 ? ' + ' : ''}Svc: ฿${parseFloat(parcel.ServiceFee).toFixed(2)}`}
+                            {parcel.Price > 0 && `${(parcel.PackagePrice > 0 || parcel.ServiceFee > 0) ? ' + ' : ''}Del: ฿${parseFloat(parcel.Price).toFixed(2)}`}
+                          </div>
+                        </>
                       )}
                       <div className="text-xs text-gray-600">Net Wt: {parcel.weight || 0} Kg</div>
                     </div>

@@ -148,7 +148,18 @@ const CarrierParcelDetails = () => {
 
       const response = await carriersAPI.submitMeasurements(parcelID, submitData)
       const totalPrice = response.data.totalPrice || response.data.price
-      alert(`Measurements submitted! Final total price: ฿${parseFloat(totalPrice).toFixed(2)} (Delivery: ฿${parseFloat(response.data.deliveryPrice || 0).toFixed(2)} + Package: ฿${parseFloat(response.data.packagePrice || 0).toFixed(2)})`)
+      const packagePrice = parseFloat(response.data.packagePrice || 0)
+      const baseDeliveryPrice = parseFloat(response.data.baseDeliveryPrice || 0)
+      const fastDeliveryFee = parseFloat(response.data.fastDeliveryFee || 0)
+      const serviceFee = parseFloat(response.data.serviceFee || 0)
+      
+      let breakdown = []
+      if (packagePrice > 0) breakdown.push(`Package: ฿${packagePrice.toFixed(2)}`)
+      if (serviceFee > 0) breakdown.push(`Services: ฿${serviceFee.toFixed(2)}`)
+      if (baseDeliveryPrice > 0) breakdown.push(`Delivery: ฿${baseDeliveryPrice.toFixed(2)}`)
+      if (fastDeliveryFee > 0) breakdown.push(`Fast Fee: ฿${fastDeliveryFee.toFixed(2)}`)
+      
+      alert(`Measurements submitted! Final total price: ฿${parseFloat(totalPrice).toFixed(2)}${breakdown.length > 0 ? ` (${breakdown.join(', ')})` : ''}`)
       setMeasurementForm({ weight: '', dimension_x: '', dimension_y: '', dimension_z: '' })
       loadParcel()
     } catch (error) {
@@ -300,16 +311,38 @@ const CarrierParcelDetails = () => {
                         <span className="font-semibold">฿{parseFloat(parcel.PackagePrice).toFixed(2)}</span>
                       </div>
                     )}
+                    {parcel.ServiceFee && parseFloat(parcel.ServiceFee) > 0 && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-600">Service Fees</span>
+                        <span className="font-semibold text-green-600">
+                          ฿{parseFloat(parcel.ServiceFee).toFixed(2)}
+                          {parcel.services && parcel.services.length > 0 && (
+                            <span className="text-xs text-gray-500 ml-1">
+                              ({parcel.services.map(s => s.Name).join(', ')})
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-between items-center">
                       <span className="text-sm text-gray-600">Delivery Price</span>
                       <span className="font-semibold text-blue-600">
                         ฿{parseFloat(parcel.Price).toFixed(2)}
+                        {parcel.FastDeliveryFee && parseFloat(parcel.FastDeliveryFee) > 0 && (
+                          <span className="text-xs text-gray-500 ml-1">
+                            (Base: ฿{(parseFloat(parcel.Price) - parseFloat(parcel.FastDeliveryFee)).toFixed(2)} + Fast: ฿{parseFloat(parcel.FastDeliveryFee).toFixed(2)})
+                          </span>
+                        )}
                       </span>
                     </div>
-                    <div className="flex justify-between items-center pt-2 border-t border-blue-300">
+                    <div className="flex justify-between items-center pt-2 border-t-2 border-blue-300">
                       <span className="font-semibold text-lg">Total Price</span>
                       <span className="font-bold text-primary text-xl">
-                        ฿{(parseFloat(parcel.Price) + (parseFloat(parcel.PackagePrice) || 0)).toFixed(2)}
+                        ฿{(
+                          parseFloat(parcel.Price) + 
+                          (parseFloat(parcel.PackagePrice) || 0) + 
+                          (parseFloat(parcel.ServiceFee) || 0)
+                        ).toFixed(2)}
                       </span>
                     </div>
                   </div>

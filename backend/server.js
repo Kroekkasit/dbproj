@@ -19,6 +19,8 @@ app.use('/api/provinces', require('./routes/provinces'));
 app.use('/api/banks', require('./routes/banks'));
 app.use('/api/balance', require('./routes/balance'));
 app.use('/api/packages', require('./routes/packages'));
+app.use('/api/delivery-plans', require('./routes/delivery-plans'));
+app.use('/api/optional-services', require('./routes/optional-services'));
 
 // Health check
 app.get('/api/health', (req, res) => {

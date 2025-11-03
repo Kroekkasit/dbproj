@@ -78,14 +78,24 @@ const SenderDeliveryStatus = () => {
 
     const packagePrice = parseFloat(parcel.PackagePrice) || 0
     const deliveryPrice = parseFloat(parcel.Price) || 0
-    const subtotal = packagePrice + deliveryPrice
+    const fastDeliveryFee = parseFloat(parcel.FastDeliveryFee) || 0
+    const serviceFee = parseFloat(parcel.ServiceFee) || 0
+    
+    // Calculate base delivery price (delivery price includes fast fee if applicable)
+    const baseDeliveryPrice = deliveryPrice - fastDeliveryFee
+    const subtotal = packagePrice + deliveryPrice + serviceFee
 
     return {
       packagePrice,
+      baseDeliveryPrice: baseDeliveryPrice > 0 ? baseDeliveryPrice : null,
+      fastDeliveryFee,
+      serviceFee,
       deliveryPrice,
       subtotal,
       hasDeliveryPrice: !!parcel.Price,
-      hasMeasurements: !!(parcel.weight && parcel.dimension_x && parcel.dimension_y && parcel.dimension_z)
+      hasMeasurements: !!(parcel.weight && parcel.dimension_x && parcel.dimension_y && parcel.dimension_z),
+      deliveryPlanName: parcel.deliveryPlanName,
+      services: parcel.services || []
     }
   }
 
@@ -151,37 +161,78 @@ const SenderDeliveryStatus = () => {
           
           <div className="space-y-2">
             {/* Package Price */}
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Package Price:</span>
-              <span className="text-sm font-medium text-gray-800">
-                {pricing && pricing.packagePrice > 0 ? (
-                  `฿${pricing.packagePrice.toFixed(2)}`
-                ) : (
-                  <span className="text-gray-400">฿0.00 (Own Package)</span>
-                )}
-              </span>
-            </div>
-
-            {/* Delivery Price */}
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Delivery Price:</span>
-              <span className="text-sm font-medium text-gray-800">
-                {pricing && pricing.hasDeliveryPrice ? (
-                  `฿${pricing.deliveryPrice.toFixed(2)}`
-                ) : (
-                  <span className="text-yellow-600 italic">Waiting for carrier to measure</span>
-                )}
-              </span>
-            </div>
-
-            <div className="border-t border-gray-300 pt-2 mt-2">
+            {pricing && pricing.packagePrice > 0 && (
               <div className="flex justify-between items-center">
-                <span className="text-base font-semibold">Subtotal:</span>
+                <span className="text-sm text-gray-600">Package Price:</span>
+                <span className="text-sm font-medium text-gray-800">
+                  ฿{pricing.packagePrice.toFixed(2)}
+                </span>
+              </div>
+            )}
+
+            {/* Service Fees */}
+            {pricing && pricing.serviceFee > 0 && (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Service Fees:</span>
+                <span className="text-sm font-medium text-green-600">
+                  ฿{pricing.serviceFee.toFixed(2)}
+                  {pricing.services && pricing.services.length > 0 && (
+                    <span className="text-xs text-gray-500 ml-1">
+                      ({pricing.services.map(s => s.Name).join(', ')})
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
+
+            {/* Delivery Price Breakdown */}
+            {pricing && pricing.hasDeliveryPrice ? (
+              <>
+                {pricing.baseDeliveryPrice !== null && pricing.baseDeliveryPrice > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Base Delivery Price:</span>
+                    <span className="text-sm font-medium text-blue-600">
+                      ฿{pricing.baseDeliveryPrice.toFixed(2)}
+                    </span>
+                  </div>
+                )}
+                {pricing.fastDeliveryFee > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Fast Delivery Fee:</span>
+                    <span className="text-sm font-medium text-orange-600">
+                      +฿{pricing.fastDeliveryFee.toFixed(2)}
+                      {pricing.deliveryPlanName && (
+                        <span className="text-xs text-gray-500 ml-1">({pricing.deliveryPlanName})</span>
+                      )}
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center pt-1 border-t border-gray-200">
+                  <span className="text-sm text-gray-600">Total Delivery:</span>
+                  <span className="text-sm font-medium text-gray-800">
+                    ฿{pricing.deliveryPrice.toFixed(2)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-gray-600">Delivery Price:</span>
+                <span className="text-sm font-medium text-yellow-600 italic">
+                  Waiting for carrier to measure
+                </span>
+              </div>
+            )}
+
+            <div className="border-t-2 border-gray-300 pt-2 mt-2">
+              <div className="flex justify-between items-center">
+                <span className="text-base font-semibold">Total Price:</span>
                 <span className="text-lg font-bold text-primary">
                   {pricing && pricing.hasDeliveryPrice ? (
                     `฿${pricing.subtotal.toFixed(2)}`
                   ) : (
-                    <span className="text-yellow-600 italic">Calculating...</span>
+                    <span className="text-yellow-600 italic">
+                      ฿{(pricing.packagePrice + pricing.serviceFee).toFixed(2)} + Delivery (TBD)
+                    </span>
                   )}
                 </span>
               </div>

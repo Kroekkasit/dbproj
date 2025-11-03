@@ -304,10 +304,20 @@ router.post('/submit-measurements/:parcelID', authMiddleware, [
       return res.status(400).json({ message: 'Location information incomplete' });
     }
 
-    // Calculate price and delivery date
-    const { calculatePrice, calculateDeliveryDate } = require('../utils/calculations');
-    const price = await calculatePrice(weight, finalDimensionX, finalDimensionY, finalDimensionZ, originProvince, destProvince);
-    const deliveryDate = await calculateDeliveryDate(originProvince, destProvince);
+    // Calculate price and delivery date with plan
+    const { calculatePriceWithPlan, calculateDeliveryDateWithPlan } = require('../utils/calculations');
+    const priceResult = await calculatePriceWithPlan(weight, finalDimensionX, finalDimensionY, finalDimensionZ, originProvince, destProvince, parcel.DeliveryPlanID);
+    const deliveryDate = await calculateDeliveryDateWithPlan(originProvince, destProvince, parcel.DeliveryPlanID);
+    
+    // Base delivery price
+    const basePrice = priceResult.basePrice;
+    // Fast delivery fee is already stored in parcel (from creation)
+    const fastDeliveryFee = parseFloat(parcel.FastDeliveryFee) || 0;
+    // Service fee is already stored in parcel (from creation)
+    const serviceFee = parseFloat(parcel.ServiceFee) || 0;
+    
+    // Total delivery price = base + fast fee (service fee is charged separately at creation)
+    const price = basePrice + fastDeliveryFee;
 
     // Check sender balance
     const [senders] = await pool.execute(
@@ -364,7 +374,7 @@ router.post('/submit-measurements/:parcelID', authMiddleware, [
 
       // Create notification for sender
       const packagePriceForNotification = parseFloat(parcel.PackagePrice) || 0;
-      const totalPriceForNotification = price + packagePriceForNotification;
+      const totalPriceForNotification = price + packagePriceForNotification + serviceFee;
       
       await connection.execute(
         `INSERT INTO Notification (UserID, Type, Title, Message, IsRead, ParcelID)
@@ -376,14 +386,17 @@ router.post('/submit-measurements/:parcelID', authMiddleware, [
 
       await connection.commit();
 
-      // Calculate total for response (delivery price + package price already paid)
+      // Calculate total for response (delivery price + package price + service fee already paid)
       const packagePrice = parseFloat(parcel.PackagePrice) || 0;
-      const totalPrice = price + packagePrice;
+      const totalPrice = price + packagePrice + serviceFee;
 
       res.json({
         message: 'Measurements submitted and price calculated',
+        baseDeliveryPrice: basePrice,
+        fastDeliveryFee: fastDeliveryFee,
         deliveryPrice: price,
         packagePrice: packagePrice,
+        serviceFee: serviceFee,
         totalPrice: totalPrice,
         price: totalPrice, // Keep for backward compatibility
         estimatedDeliveryDate: deliveryDate.toISOString()

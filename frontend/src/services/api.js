@@ -73,3 +73,15 @@ export const balanceAPI = {
   getTransactions: () => axios.get(`${API_URL}/balance/transactions`),
 }
 
+// Delivery Plans API
+export const deliveryPlansAPI = {
+  getAll: () => axios.get(`${API_URL}/delivery-plans`),
+  getById: (planID) => axios.get(`${API_URL}/delivery-plans/${planID}`),
+}
+
+// Optional Services API
+export const optionalServicesAPI = {
+  getAll: () => axios.get(`${API_URL}/optional-services`),
+  getById: (serviceID) => axios.get(`${API_URL}/optional-services/${serviceID}`),
+}
+
