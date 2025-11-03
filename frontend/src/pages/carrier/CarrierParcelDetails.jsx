@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { parcelsAPI, carriersAPI } from '../../services/api'
 import BottomNav from '../../components/BottomNav'
+import { AuthContext } from '../../context/AuthContext'
 
 const CarrierParcelDetails = () => {
   const { parcelID } = useParams()
   const navigate = useNavigate()
+  const { showAlert, showConfirm } = useContext(AuthContext)
   const [parcel, setParcel] = useState(null)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -63,65 +65,71 @@ const CarrierParcelDetails = () => {
       // Check if there are pending warehouse route stops
       const pendingWarehouseStops = routeStops.filter(rs => rs.StopStatus === 'Pending' && rs.WarehouseID)
       if (pendingWarehouseStops.length > 0) {
-        alert('Please update all pending warehouse route stops before updating general status.')
+        showAlert('Warning', 'Please update all pending warehouse route stops before updating general status.', 'warning')
         setUpdating(false)
         return
       }
 
       await carriersAPI.updateStatus(parcelID, statusForm)
-      alert('Status updated successfully!')
+      showAlert('Success', 'Status updated successfully!', 'success')
       setStatusForm({ eventType: '', status: '', description: '', locationID: '' })
       loadParcel()
       loadRouteStops()
     } catch (error) {
       const errorMsg = error.response?.data?.message || 'Failed to update status'
-      alert(errorMsg)
+      showAlert('Error', errorMsg, 'error')
     } finally {
       setUpdating(false)
     }
   }
 
   const handleRouteStopUpdate = async (routeStopID, isLate = false) => {
-    if (!confirm(`Mark this stop as ${isLate ? 'Late' : 'Arrived'}?`)) {
-      return
-    }
-
-    setUpdating(true)
-    try {
-      const updateData = {
-        routeStopID,
-        isLate,
-        eventType: 'Warehouse Arrival',
-        status: 'In Transit',
-        description: ''
+    showConfirm(
+      'Confirm Update',
+      `Mark this stop as ${isLate ? 'Late' : 'Arrived'}?`,
+      async () => {
+        setUpdating(true)
+        try {
+          const updateData = {
+            routeStopID,
+            isLate,
+            eventType: 'Warehouse Arrival',
+            status: 'In Transit',
+            description: ''
+          }
+          const response = await carriersAPI.updateStatus(parcelID, updateData)
+          if (response.data.warehouseName) {
+            showAlert('Success', `Arrived at ${response.data.warehouseName} successfully!`, 'success')
+          } else {
+            showAlert('Success', 'Status updated successfully!', 'success')
+          }
+          loadParcel()
+          loadRouteStops()
+        } catch (error) {
+          console.error('Route stop update error:', error)
+          const errorMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.msg || error.message || 'Failed to update route stop'
+          showAlert('Error', errorMsg, 'error')
+        } finally {
+          setUpdating(false)
+        }
       }
-      const response = await carriersAPI.updateStatus(parcelID, updateData)
-      if (response.data.warehouseName) {
-        alert(`Arrived at ${response.data.warehouseName} successfully!`)
-      } else {
-        alert('Status updated successfully!')
-      }
-      loadParcel()
-      loadRouteStops()
-    } catch (error) {
-      console.error('Route stop update error:', error)
-      const errorMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.msg || error.message || 'Failed to update route stop'
-      alert(errorMsg)
-    } finally {
-      setUpdating(false)
-    }
+    )
   }
 
   const handleAccept = async () => {
-    if (!window.confirm('Accept this parcel assignment? You will need to pick it up and measure it.')) return
-
-    try {
-      await carriersAPI.acceptParcel(parcelID)
-      alert('Parcel accepted successfully! Please proceed to pickup location and submit measurements.')
-      loadParcel()
-    } catch (error) {
-      alert(error.response?.data?.message || 'Failed to accept parcel')
-    }
+    showConfirm(
+      'Accept Parcel',
+      'Accept this parcel assignment? You will need to pick it up and measure it.',
+      async () => {
+        try {
+          await carriersAPI.acceptParcel(parcelID)
+          showAlert('Success', 'Parcel accepted successfully! Please proceed to pickup location and submit measurements.', 'success')
+          loadParcel()
+        } catch (error) {
+          showAlert('Error', error.response?.data?.message || 'Failed to accept parcel', 'error')
+        }
+      }
+    )
   }
 
   const handleSubmitMeasurements = async (e) => {
@@ -137,7 +145,7 @@ const CarrierParcelDetails = () => {
       // Only include dimensions if sender uses their own package (no SelectedPackageID)
       if (!parcel.SelectedPackageID) {
         if (!measurementForm.dimension_x || !measurementForm.dimension_y || !measurementForm.dimension_z) {
-          alert('Please fill in all dimensions (Length, Width, Height)')
+          showAlert('Warning', 'Please fill in all dimensions (Length, Width, Height)', 'warning')
           setSubmittingMeasurements(false)
           return
         }
@@ -159,13 +167,13 @@ const CarrierParcelDetails = () => {
       if (baseDeliveryPrice > 0) breakdown.push(`Delivery: ฿${baseDeliveryPrice.toFixed(2)}`)
       if (fastDeliveryFee > 0) breakdown.push(`Fast Fee: ฿${fastDeliveryFee.toFixed(2)}`)
       
-      alert(`Measurements submitted! Final total price: ฿${parseFloat(totalPrice).toFixed(2)}${breakdown.length > 0 ? ` (${breakdown.join(', ')})` : ''}`)
+      showAlert('Success', `Measurements submitted! Final total price: ฿${parseFloat(totalPrice).toFixed(2)}${breakdown.length > 0 ? ` (${breakdown.join(', ')})` : ''}`, 'success')
       setMeasurementForm({ weight: '', dimension_x: '', dimension_y: '', dimension_z: '' })
       loadParcel()
     } catch (error) {
       console.error('Submit measurements error:', error)
       const errorMsg = error.response?.data?.message || error.response?.data?.errors?.[0]?.msg || error.message || 'Failed to submit measurements'
-      alert(errorMsg)
+      showAlert('Error', errorMsg, 'error')
     } finally {
       setSubmittingMeasurements(false)
     }

@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { parcelsAPI } from '../../services/api'
 import BottomNav from '../../components/BottomNav'
+import { AuthContext } from '../../context/AuthContext'
 
 const SenderDeliveryStatus = () => {
   const { parcelID, trackingNumber } = useParams()
   const navigate = useNavigate()
+  const { showAlert } = useContext(AuthContext)
   const [parcel, setParcel] = useState(null)
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -41,10 +43,10 @@ const SenderDeliveryStatus = () => {
     setNotifying(true)
     try {
       await parcelsAPI.notifyCarriers(parcelID)
-      alert('Carriers have been notified!')
+      showAlert('Success', 'Carriers have been notified!', 'success')
       loadParcel()
     } catch (error) {
-      alert(error.response?.data?.message || 'Failed to notify carriers')
+      showAlert('Error', error.response?.data?.message || 'Failed to notify carriers', 'error')
     } finally {
       setNotifying(false)
     }

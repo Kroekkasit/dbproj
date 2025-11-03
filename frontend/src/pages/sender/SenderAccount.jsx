@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth, AuthContext } from '../../context/AuthContext'
 import { addressesAPI, balanceAPI, provincesAPI } from '../../services/api'
 import BottomNav from '../../components/BottomNav'
 
 const SenderAccount = () => {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const { showAlert, showConfirm } = useContext(AuthContext)
   const [addresses, setAddresses] = useState([])
   const [balance, setBalance] = useState(0)
   const [provinces, setProvinces] = useState([])
@@ -127,7 +128,7 @@ const SenderAccount = () => {
       }
       await loadAddresses()
       handleCancel()
-      alert('Address saved successfully!')
+      showAlert('Success', 'Address saved successfully!', 'success')
     } catch (err) {
       console.error('Address save error:', err)
       const errorMsg = err.response?.data?.message || err.response?.data?.errors?.[0]?.msg || err.message || 'Failed to save address'
@@ -138,18 +139,20 @@ const SenderAccount = () => {
   }
 
   const handleDelete = async (userLocationID) => {
-    if (!window.confirm('Are you sure you want to delete this address?')) {
-      return
-    }
-
-    try {
-      await addressesAPI.delete(userLocationID)
-      await loadAddresses()
-      alert('Address deleted successfully!')
-    } catch (err) {
-      console.error('Address delete error:', err)
-      alert(err.response?.data?.message || 'Failed to delete address')
-    }
+    showConfirm(
+      'Delete Address',
+      'Are you sure you want to delete this address?',
+      async () => {
+        try {
+          await addressesAPI.delete(userLocationID)
+          await loadAddresses()
+          showAlert('Success', 'Address deleted successfully!', 'success')
+        } catch (err) {
+          console.error('Address delete error:', err)
+          showAlert('Error', err.response?.data?.message || 'Failed to delete address', 'error')
+        }
+      }
+    )
   }
 
   const handleLogout = () => {

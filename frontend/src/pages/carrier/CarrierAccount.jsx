@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth, AuthContext } from '../../context/AuthContext'
 import { carriersAPI } from '../../services/api'
 import BottomNav from '../../components/BottomNav'
 
 const CarrierAccount = () => {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const { showAlert } = useContext(AuthContext)
   const [carrier, setCarrier] = useState(null)
   const [showForm, setShowForm] = useState(false)
   const [formData, setFormData] = useState({
@@ -66,7 +67,7 @@ const CarrierAccount = () => {
       await carriersAPI.updateProfile(formData)
       await loadProfile()
       setShowForm(false)
-      alert('Profile updated successfully!')
+      showAlert('Success', 'Profile updated successfully!', 'success')
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to update profile')
     } finally {

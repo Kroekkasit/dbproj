@@ -1,12 +1,13 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth, AuthContext } from '../../context/AuthContext'
 import { parcelsAPI, addressesAPI, provincesAPI, balanceAPI, packagesAPI, deliveryPlansAPI, optionalServicesAPI } from '../../services/api'
 import BottomNav from '../../components/BottomNav'
 
 const SenderCreateParcel = () => {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const { showAlert } = useContext(AuthContext)
   const [formData, setFormData] = useState({
     receiverName: '',
     receiverPhone: '',
@@ -130,7 +131,7 @@ const SenderCreateParcel = () => {
       }
 
       const response = await parcelsAPI.create(submitData)
-      alert('Parcel created successfully! You can now notify carriers.')
+      showAlert('Success', 'Parcel created successfully! You can now notify carriers.', 'success')
       navigate(`/sender/parcel/${response.data.parcel.parcelID}`)
     } catch (err) {
       if (err.response?.data?.required !== undefined && err.response?.data?.current !== undefined) {

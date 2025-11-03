@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { carriersAPI } from '../../services/api'
 import BottomNav from '../../components/BottomNav'
+import { AuthContext } from '../../context/AuthContext'
 
 const CarrierHome = () => {
   const navigate = useNavigate()
+  const { showAlert, showConfirm } = useContext(AuthContext)
   const [availableParcels, setAvailableParcels] = useState([])
   const [myParcels, setMyParcels] = useState([])
   const [activeTab, setActiveTab] = useState('available')
@@ -30,15 +32,19 @@ const CarrierHome = () => {
   }
 
   const handleAccept = async (parcelID) => {
-    if (!window.confirm('Accept this parcel assignment?')) return
-
-    try {
-      await carriersAPI.acceptParcel(parcelID)
-      alert('Parcel accepted successfully!')
-      loadData()
-    } catch (error) {
-      alert(error.response?.data?.message || 'Failed to accept parcel')
-    }
+    showConfirm(
+      'Accept Parcel',
+      'Accept this parcel assignment?',
+      async () => {
+        try {
+          await carriersAPI.acceptParcel(parcelID)
+          showAlert('Success', 'Parcel accepted successfully!', 'success')
+          loadData()
+        } catch (error) {
+          showAlert('Error', error.response?.data?.message || 'Failed to accept parcel', 'error')
+        }
+      }
+    )
   }
 
   const formatDate = (dateString) => {
